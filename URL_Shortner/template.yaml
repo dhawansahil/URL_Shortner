@@ -1,0 +1,77 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Zero-Cost URL Shortener
+  
+  Serverless Spring Boot 3 API with DynamoDB and CloudFront.
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 2048 # Higher memory = faster startup/cpu. Billing is GB-seconds.
+    Environment:
+      Variables:
+        JAVA_TOOL_OPTIONS: "-XX:+TieredCompilation -XX:TieredStopAtLevel=1" # Speed up cold starts
+
+Resources:
+  # Lambda Function
+  UrlShortenerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: com.systemdesign.urlshortener.StreamLambdaHandler::handleRequest
+      Runtime: java17
+      Architectures:
+        - x86_64
+      SnapStart:
+        ApplyOn: PublishedVersions
+      AutoPublishAlias: live
+      FunctionUrlConfig:
+        AuthType: NONE # Publicly accessible
+        Cors:
+          AllowOrigins:
+            - "*"
+          AllowMethods: 
+            - GET 
+            - POST
+      Environment:
+        Variables:
+          APP_DOMAIN: !Sub "https://${Distribution.DomainName}"
+          # RDS Configuration (To be set during deployment or in Secrets Manager)
+          DB_URL: jdbc:mysql://YOUR_RDS_ENDPOINT:3306/url_shortener
+          DB_USERNAME: admin
+          DB_PASSWORD: password
+
+  # CloudFront Distribution
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Origins:
+          - Id: LambdaOrigin
+            DomainName: !Select [2, !Split ["/", !GetAtt UrlShortenerFunctionUrl.FunctionUrl]]
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+        DefaultCacheBehavior:
+          TargetOriginId: LambdaOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+          CachedMethods: [GET, HEAD, OPTIONS]
+          # Forward query strings and headers appropriately
+          ForwardedValues:
+            QueryString: true
+            Headers:
+              - Accept
+              - Content-Type
+          DefaultTTL: 86400 # 1 day default
+          MinTTL: 0
+          MaxTTL: 31536000 # 1 year
+
+Outputs:
+  ApiUrl:
+    Description: "API Endpoint URL"
+    Value: !GetAtt UrlShortenerFunctionUrl.FunctionUrl
+  CloudFrontUrl:
+    Description: "CloudFront Distribution URL"
+    Value: !Sub "https://${Distribution.DomainName}"
